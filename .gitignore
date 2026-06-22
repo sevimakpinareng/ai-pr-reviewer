@@ -1,0 +1,24 @@
+# Secrets / local env
+.env
+*.env
+!.env.example
+
+# Maven build output
+target/
+
+# Maven wrapper: keep scripts + properties, ignore the downloaded jar
+.mvn/wrapper/maven-wrapper.jar
+
+# IDE
+.idea/
+*.iml
+.vscode/
+.settings/
+.project
+.classpath
+
+# OS
+.DS_Store
+
+# Logs
+*.log
