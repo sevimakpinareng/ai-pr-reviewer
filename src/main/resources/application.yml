@@ -41,8 +41,17 @@ springdoc:
   swagger-ui:
     path: /swagger-ui.html
 
-# GitHub integration. The webhook secret is read from the environment and is
-# used to verify the HMAC-SHA256 signature of every incoming delivery.
+# GitHub integration. All credentials come from the environment; nothing
+# sensitive is committed.
 github:
+  app:
+    # Numeric GitHub App ID and the path to its private key (.pem, PKCS#1 or
+    # PKCS#8). The key file itself must never be committed.
+    id: ${GITHUB_APP_ID:0}
+    private-key-path: ${GITHUB_PRIVATE_KEY_PATH:}
+  api:
+    # Overridable so tests can point at a mock server.
+    base-url: ${GITHUB_API_BASE_URL:https://api.github.com}
   webhook:
+    # Used to verify the HMAC-SHA256 signature of every incoming delivery.
     secret: ${GITHUB_WEBHOOK_SECRET:}

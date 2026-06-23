@@ -3,6 +3,7 @@ package com.example.prreviewer.service;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.Mockito.mock;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -21,7 +22,7 @@ class GithubWebhookServiceTest {
     private static final String SECRET = "mysecret";
 
     private final GithubWebhookService service =
-            new GithubWebhookService(new ObjectMapper(), SECRET);
+            new GithubWebhookService(new ObjectMapper(), mock(GithubApiClient.class), SECRET);
 
     @Test
     void acceptsValidSignature() throws IOException {
@@ -58,6 +59,9 @@ class GithubWebhookServiceTest {
         assertEquals(42L, info.prNumber());
         assertEquals("opened", info.action());
         assertEquals("6dcb09b5b57875f334f61aebed695e2e4193db5e", info.headSha());
+        assertEquals(12345678L, info.installationId());
+        assertEquals("octocat", info.owner());
+        assertEquals("Hello-World", info.repo());
     }
 
     private static byte[] payload() throws IOException {

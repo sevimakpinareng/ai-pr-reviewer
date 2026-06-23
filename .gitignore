@@ -3,6 +3,10 @@
 *.env
 !.env.example
 
+# GitHub App private key(s) — never commit these
+*.pem
+secrets/
+
 # Maven build output
 target/
 

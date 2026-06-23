@@ -23,5 +23,8 @@
   "sender": {
     "login": "octocat",
     "id": 583231
+  },
+  "installation": {
+    "id": 12345678
   }
 }

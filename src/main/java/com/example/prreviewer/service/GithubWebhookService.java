@@ -5,6 +5,7 @@ import java.nio.charset.StandardCharsets;
 import java.security.InvalidKeyException;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.util.Arrays;
 import java.util.HexFormat;
 import java.util.Set;
 
@@ -37,12 +38,18 @@ public class GithubWebhookService {
     /** pull_request actions we care about; everything else is ignored. */
     private static final Set<String> RELEVANT_ACTIONS = Set.of("opened", "synchronize", "reopened");
 
+    /** How many leading diff lines to log as a preview. */
+    private static final int DIFF_PREVIEW_LINES = 30;
+
     private final ObjectMapper objectMapper;
+    private final GithubApiClient githubApiClient;
     private final String webhookSecret;
 
     public GithubWebhookService(ObjectMapper objectMapper,
+                                GithubApiClient githubApiClient,
                                 @Value("${github.webhook.secret:}") String webhookSecret) {
         this.objectMapper = objectMapper;
+        this.githubApiClient = githubApiClient;
         this.webhookSecret = webhookSecret;
     }
 
@@ -88,13 +95,50 @@ public class GithubWebhookService {
         }
 
         PullRequestInfo info = parsePullRequest(rawBody);
-        if (RELEVANT_ACTIONS.contains(info.action())) {
-            log.info("pull_request {} -> repo={} pr=#{} headSha={}",
-                    info.action(), info.repoFullName(), info.prNumber(), info.headSha());
-        } else {
+        if (!RELEVANT_ACTIONS.contains(info.action())) {
             log.info("pull_request action '{}' ignored (repo={} pr=#{})",
                     info.action(), info.repoFullName(), info.prNumber());
+            return;
         }
+
+        log.info("pull_request {} -> repo={} pr=#{} headSha={}",
+                info.action(), info.repoFullName(), info.prNumber(), info.headSha());
+        fetchAndLogDiff(info);
+    }
+
+    /**
+     * Best-effort diff fetch. Any failure (auth, network, GitHub error) is
+     * logged and swallowed so a single bad delivery never takes the app down.
+     * There is no queue/retry yet — that comes in a later step.
+     */
+    private void fetchAndLogDiff(PullRequestInfo info) {
+        String owner = info.owner();
+        String repo = info.repo();
+        if (owner == null || repo == null || info.installationId() <= 0) {
+            log.warn("Cannot fetch diff: missing installation/repo info (repo={} installationId={})",
+                    info.repoFullName(), info.installationId());
+            return;
+        }
+
+        try {
+            String diff = githubApiClient.fetchPullRequestDiff(
+                    info.installationId(), owner, repo, (int) info.prNumber());
+            int byteSize = diff == null ? 0 : diff.getBytes(StandardCharsets.UTF_8).length;
+            log.info("Fetched diff for {} #{}: {} bytes", info.repoFullName(), info.prNumber(), byteSize);
+            if (diff != null && !diff.isEmpty()) {
+                log.info("Diff preview ({} #{}), first {} lines:\n{}",
+                        info.repoFullName(), info.prNumber(), DIFF_PREVIEW_LINES, previewLines(diff));
+            }
+        } catch (Exception e) {
+            log.error("Failed to fetch diff for {} #{}: {}",
+                    info.repoFullName(), info.prNumber(), e.getMessage(), e);
+        }
+    }
+
+    private static String previewLines(String diff) {
+        String[] lines = diff.split("\n", -1);
+        int count = Math.min(DIFF_PREVIEW_LINES, lines.length);
+        return String.join("\n", Arrays.copyOfRange(lines, 0, count));
     }
 
     /**
@@ -108,7 +152,8 @@ public class GithubWebhookService {
             String repoFullName = root.path("repository").path("full_name").asText(null);
             long prNumber = root.path("number").asLong();
             String headSha = root.path("pull_request").path("head").path("sha").asText(null);
-            return new PullRequestInfo(repoFullName, prNumber, action, headSha);
+            long installationId = root.path("installation").path("id").asLong();
+            return new PullRequestInfo(repoFullName, prNumber, action, headSha, installationId);
         } catch (IOException e) {
             throw new IllegalArgumentException("Malformed webhook JSON payload", e);
         }
@@ -124,7 +169,26 @@ public class GithubWebhookService {
         }
     }
 
-    /** The subset of a pull_request event we currently log. */
-    public record PullRequestInfo(String repoFullName, long prNumber, String action, String headSha) {
+    /** The subset of a pull_request event we currently use. */
+    public record PullRequestInfo(String repoFullName, long prNumber, String action, String headSha,
+                                  long installationId) {
+
+        /** Owner portion of "owner/repo", or null if unparseable. */
+        public String owner() {
+            return splitFullName(0);
+        }
+
+        /** Repository portion of "owner/repo", or null if unparseable. */
+        public String repo() {
+            return splitFullName(1);
+        }
+
+        private String splitFullName(int index) {
+            if (repoFullName == null) {
+                return null;
+            }
+            String[] parts = repoFullName.split("/", 2);
+            return parts.length == 2 ? parts[index] : null;
+        }
     }
 }

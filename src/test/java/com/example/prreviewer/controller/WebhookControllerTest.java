@@ -20,9 +20,11 @@ import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
 import org.springframework.context.annotation.Import;
 import org.springframework.http.MediaType;
 import org.springframework.test.context.TestPropertySource;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.test.web.servlet.MockMvc;
 
+import com.example.prreviewer.service.GithubApiClient;
 import com.example.prreviewer.service.GithubWebhookService;
 
 @WebMvcTest(WebhookController.class)
@@ -39,6 +41,10 @@ class WebhookControllerTest {
     // real, but we can also assert how the controller dispatched.
     @MockitoSpyBean
     private GithubWebhookService webhookService;
+
+    // The real service depends on this; mocked so no real GitHub call happens.
+    @MockitoBean
+    private GithubApiClient githubApiClient;
 
     @Test
     void validSignatureIsProcessedAndReturns200() throws Exception {
