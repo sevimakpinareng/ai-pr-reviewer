@@ -40,3 +40,9 @@ management:
 springdoc:
   swagger-ui:
     path: /swagger-ui.html
+
+# GitHub integration. The webhook secret is read from the environment and is
+# used to verify the HMAC-SHA256 signature of every incoming delivery.
+github:
+  webhook:
+    secret: ${GITHUB_WEBHOOK_SECRET:}

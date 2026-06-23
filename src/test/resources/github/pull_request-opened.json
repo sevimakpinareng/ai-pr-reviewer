@@ -1,0 +1,27 @@
+{
+  "action": "opened",
+  "number": 42,
+  "pull_request": {
+    "number": 42,
+    "state": "open",
+    "title": "Add caching layer",
+    "head": {
+      "sha": "6dcb09b5b57875f334f61aebed695e2e4193db5e",
+      "ref": "feature/cache"
+    },
+    "base": {
+      "sha": "9049f1265b7d61be4a8904a9a27120d2064dab3b",
+      "ref": "main"
+    }
+  },
+  "repository": {
+    "id": 1296269,
+    "name": "Hello-World",
+    "full_name": "octocat/Hello-World",
+    "default_branch": "main"
+  },
+  "sender": {
+    "login": "octocat",
+    "id": 583231
+  }
+}
