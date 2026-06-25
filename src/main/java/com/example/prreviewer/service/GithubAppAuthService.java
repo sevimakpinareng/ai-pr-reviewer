@@ -10,6 +10,7 @@ import java.util.concurrent.ConcurrentHashMap;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
@@ -50,6 +51,7 @@ public class GithubAppAuthService {
     private final ConcurrentHashMap<Long, CachedToken> tokenCache = new ConcurrentHashMap<>();
     private volatile PrivateKey privateKey;
 
+    @Autowired
     public GithubAppAuthService(@Value("${github.app.id:0}") long appId,
                                 @Value("${github.app.private-key-path:}") String privateKeyPath,
                                 RestClient githubRestClient,

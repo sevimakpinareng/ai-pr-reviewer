@@ -21,8 +21,8 @@ class GithubWebhookServiceTest {
 
     private static final String SECRET = "mysecret";
 
-    private final GithubWebhookService service =
-            new GithubWebhookService(new ObjectMapper(), mock(GithubApiClient.class), SECRET);
+    private final GithubWebhookService service = new GithubWebhookService(
+            new ObjectMapper(), mock(GithubApiClient.class), mock(ReviewService.class), SECRET);
 
     @Test
     void acceptsValidSignature() throws IOException {

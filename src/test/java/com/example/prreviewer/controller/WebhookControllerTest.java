@@ -26,6 +26,7 @@ import org.springframework.test.web.servlet.MockMvc;
 
 import com.example.prreviewer.service.GithubApiClient;
 import com.example.prreviewer.service.GithubWebhookService;
+import com.example.prreviewer.service.ReviewService;
 
 @WebMvcTest(WebhookController.class)
 @Import(GithubWebhookService.class)
@@ -42,9 +43,12 @@ class WebhookControllerTest {
     @MockitoSpyBean
     private GithubWebhookService webhookService;
 
-    // The real service depends on this; mocked so no real GitHub call happens.
+    // The real service depends on these; mocked so no real GitHub/LLM call happens.
     @MockitoBean
     private GithubApiClient githubApiClient;
+
+    @MockitoBean
+    private ReviewService reviewService;
 
     @Test
     void validSignatureIsProcessedAndReturns200() throws Exception {

@@ -17,6 +17,8 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
+import com.example.prreviewer.dto.ReviewFinding;
+import com.example.prreviewer.dto.ReviewResult;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
@@ -43,13 +45,16 @@ public class GithubWebhookService {
 
     private final ObjectMapper objectMapper;
     private final GithubApiClient githubApiClient;
+    private final ReviewService reviewService;
     private final String webhookSecret;
 
     public GithubWebhookService(ObjectMapper objectMapper,
                                 GithubApiClient githubApiClient,
+                                ReviewService reviewService,
                                 @Value("${github.webhook.secret:}") String webhookSecret) {
         this.objectMapper = objectMapper;
         this.githubApiClient = githubApiClient;
+        this.reviewService = reviewService;
         this.webhookSecret = webhookSecret;
     }
 
@@ -128,10 +133,23 @@ public class GithubWebhookService {
             if (diff != null && !diff.isEmpty()) {
                 log.info("Diff preview ({} #{}), first {} lines:\n{}",
                         info.repoFullName(), info.prNumber(), DIFF_PREVIEW_LINES, previewLines(diff));
+                reviewAndLog(info, diff);
             }
         } catch (Exception e) {
             log.error("Failed to fetch diff for {} #{}: {}",
                     info.repoFullName(), info.prNumber(), e.getMessage(), e);
+        }
+    }
+
+    /** Runs the AI review and logs the structured result. Writes nothing to GitHub yet. */
+    private void reviewAndLog(PullRequestInfo info, String diff) {
+        ReviewResult result = reviewService.review(diff);
+        log.info("AI review for {} #{}: {} finding(s) — {}",
+                info.repoFullName(), info.prNumber(), result.findings().size(), result.summary());
+        for (ReviewFinding finding : result.findings()) {
+            log.info("  [{}] {}:{} — {}",
+                    finding.severity(), finding.filePath(),
+                    finding.line() == null ? "?" : finding.line(), finding.title());
         }
     }
 

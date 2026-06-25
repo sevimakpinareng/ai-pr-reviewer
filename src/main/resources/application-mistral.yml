@@ -1,0 +1,7 @@
+# Activate with SPRING_PROFILES_ACTIVE=mistral.
+# Switches the AI provider from local Ollama to the hosted Mistral AI API.
+# Requires MISTRAL_API_KEY to be set in the environment.
+spring:
+  ai:
+    model:
+      chat: mistral

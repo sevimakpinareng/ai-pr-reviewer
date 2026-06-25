@@ -2,6 +2,30 @@ spring:
   application:
     name: pr-reviewer
 
+  # AI review. Default provider is local Ollama (free during development);
+  # activate the "mistral" profile (SPRING_PROFILES_ACTIVE=mistral) to use the
+  # hosted Mistral AI API instead. `model.chat` selects exactly one provider so
+  # there is a single ChatModel/ChatClient on the classpath.
+  ai:
+    model:
+      chat: ollama
+      # We only use chat. Disable the other Mistral/Ollama model autoconfigs
+      # (embedding, moderation) so they don't eagerly demand an API key.
+      embedding: none
+      moderation: none
+    ollama:
+      base-url: ${OLLAMA_BASE_URL:http://localhost:11434}
+      chat:
+        options:
+          model: ${OLLAMA_MODEL:qwen2.5-coder:7b}
+          temperature: ${REVIEW_TEMPERATURE:0.1}
+    mistralai:
+      api-key: ${MISTRAL_API_KEY:}
+      chat:
+        options:
+          model: ${MISTRAL_MODEL:mistral-small-latest}
+          temperature: ${REVIEW_TEMPERATURE:0.1}
+
   # DB connection is read entirely from the environment so that no secrets
   # ever live in the repo. Defaults point at the local docker-compose Postgres.
   datasource:
@@ -55,3 +79,13 @@ github:
   webhook:
     # Used to verify the HMAC-SHA256 signature of every incoming delivery.
     secret: ${GITHUB_WEBHOOK_SECRET:}
+
+# Review tuning (noise control).
+app:
+  review:
+    # Cap on diff size sent to the model (crude; real chunking comes later).
+    max-diff-chars: ${REVIEW_MAX_DIFF_CHARS:12000}
+    # Drop findings below this severity (INFO, WARNING, ERROR).
+    severity-threshold: ${REVIEW_SEVERITY_THRESHOLD:WARNING}
+    # Hard cap on number of findings returned, highest severity first.
+    max-findings: ${REVIEW_MAX_FINDINGS:10}
