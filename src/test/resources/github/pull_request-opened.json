@@ -18,7 +18,10 @@
     "id": 1296269,
     "name": "Hello-World",
     "full_name": "octocat/Hello-World",
-    "default_branch": "main"
+    "default_branch": "main",
+    "owner": {
+      "login": "octocat"
+    }
   },
   "sender": {
     "login": "octocat",

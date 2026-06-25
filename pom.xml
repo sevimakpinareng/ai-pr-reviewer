@@ -24,6 +24,10 @@
         <bouncycastle.version>1.78.1</bouncycastle.version>
         <mockwebserver.version>4.12.0</mockwebserver.version>
         <spring-ai.version>1.0.0</spring-ai.version>
+        <!-- Override the Boot-managed 1.20.x: newer docker-java negotiates a
+             modern Docker API version (the 1.20.x default is rejected by recent
+             engines with "client version too old"). -->
+        <testcontainers.version>1.21.3</testcontainers.version>
     </properties>
 
     <dependencyManagement>
@@ -141,6 +145,22 @@
             <version>${mockwebserver.version}</version>
             <scope>test</scope>
         </dependency>
+        <!-- Real PostgreSQL in tests (versions managed by the Spring Boot BOM) -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-testcontainers</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>postgresql</artifactId>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
 
     <build>
@@ -159,5 +179,46 @@
             </plugin>
         </plugins>
     </build>
+
+    <profiles>
+        <!--
+            Opt-in profile for running the Testcontainers integration tests on a
+            local colima engine (macOS), where: the default docker socket path
+            contains spaces, the bundled docker-java negotiates too low an API
+            version, and Ryuk's socket-mounting sidecar is flaky. Activate with
+            `-Pcolima` and export DOCKER_HOST to a space-free socket path, e.g.:
+
+              ln -sf "$HOME/Library/Application Support/colima/default/docker.sock" /tmp/colima.sock
+              DOCKER_HOST=unix:///tmp/colima.sock ./mvnw -Pcolima test
+
+            Surefire does not inherit the parent shell's environment, so the
+            required variables are forwarded explicitly here. Not needed on a
+            standard Docker setup (CI), where @ServiceConnection works as-is.
+        -->
+        <profile>
+            <id>colima</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-surefire-plugin</artifactId>
+                        <configuration>
+                            <!-- docker-java only honors the API version as a JVM
+                                 system property (api.version), not the env var.
+                                 Use systemPropertyVariables so we don't clobber
+                                 the parent's argLine. -->
+                            <systemPropertyVariables>
+                                <api.version>1.43</api.version>
+                            </systemPropertyVariables>
+                            <environmentVariables>
+                                <DOCKER_HOST>${env.DOCKER_HOST}</DOCKER_HOST>
+                                <TESTCONTAINERS_RYUK_DISABLED>true</TESTCONTAINERS_RYUK_DISABLED>
+                            </environmentVariables>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
 
 </project>

@@ -22,7 +22,7 @@ class GithubWebhookServiceTest {
     private static final String SECRET = "mysecret";
 
     private final GithubWebhookService service = new GithubWebhookService(
-            new ObjectMapper(), mock(GithubApiClient.class), mock(ReviewService.class), SECRET);
+            new ObjectMapper(), mock(GithubApiClient.class), mock(ReviewProcessingService.class), SECRET);
 
     @Test
     void acceptsValidSignature() throws IOException {
@@ -62,6 +62,8 @@ class GithubWebhookServiceTest {
         assertEquals(12345678L, info.installationId());
         assertEquals("octocat", info.owner());
         assertEquals("Hello-World", info.repo());
+        assertEquals("octocat", info.accountLogin());
+        assertEquals("main", info.defaultBranch());
     }
 
     private static byte[] payload() throws IOException {

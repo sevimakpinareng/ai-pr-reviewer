@@ -26,7 +26,7 @@ import org.springframework.test.web.servlet.MockMvc;
 
 import com.example.prreviewer.service.GithubApiClient;
 import com.example.prreviewer.service.GithubWebhookService;
-import com.example.prreviewer.service.ReviewService;
+import com.example.prreviewer.service.ReviewProcessingService;
 
 @WebMvcTest(WebhookController.class)
 @Import(GithubWebhookService.class)
@@ -48,7 +48,7 @@ class WebhookControllerTest {
     private GithubApiClient githubApiClient;
 
     @MockitoBean
-    private ReviewService reviewService;
+    private ReviewProcessingService reviewProcessingService;
 
     @Test
     void validSignatureIsProcessedAndReturns200() throws Exception {

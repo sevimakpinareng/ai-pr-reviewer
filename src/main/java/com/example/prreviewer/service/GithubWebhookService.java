@@ -17,8 +17,6 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
-import com.example.prreviewer.dto.ReviewFinding;
-import com.example.prreviewer.dto.ReviewResult;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
@@ -45,16 +43,16 @@ public class GithubWebhookService {
 
     private final ObjectMapper objectMapper;
     private final GithubApiClient githubApiClient;
-    private final ReviewService reviewService;
+    private final ReviewProcessingService reviewProcessingService;
     private final String webhookSecret;
 
     public GithubWebhookService(ObjectMapper objectMapper,
                                 GithubApiClient githubApiClient,
-                                ReviewService reviewService,
+                                ReviewProcessingService reviewProcessingService,
                                 @Value("${github.webhook.secret:}") String webhookSecret) {
         this.objectMapper = objectMapper;
         this.githubApiClient = githubApiClient;
-        this.reviewService = reviewService;
+        this.reviewProcessingService = reviewProcessingService;
         this.webhookSecret = webhookSecret;
     }
 
@@ -133,23 +131,12 @@ public class GithubWebhookService {
             if (diff != null && !diff.isEmpty()) {
                 log.info("Diff preview ({} #{}), first {} lines:\n{}",
                         info.repoFullName(), info.prNumber(), DIFF_PREVIEW_LINES, previewLines(diff));
-                reviewAndLog(info, diff);
+                // Hand off to the review + persistence orchestration.
+                reviewProcessingService.processPullRequest(info, diff);
             }
         } catch (Exception e) {
             log.error("Failed to fetch diff for {} #{}: {}",
                     info.repoFullName(), info.prNumber(), e.getMessage(), e);
-        }
-    }
-
-    /** Runs the AI review and logs the structured result. Writes nothing to GitHub yet. */
-    private void reviewAndLog(PullRequestInfo info, String diff) {
-        ReviewResult result = reviewService.review(diff);
-        log.info("AI review for {} #{}: {} finding(s) — {}",
-                info.repoFullName(), info.prNumber(), result.findings().size(), result.summary());
-        for (ReviewFinding finding : result.findings()) {
-            log.info("  [{}] {}:{} — {}",
-                    finding.severity(), finding.filePath(),
-                    finding.line() == null ? "?" : finding.line(), finding.title());
         }
     }
 
@@ -167,11 +154,15 @@ public class GithubWebhookService {
         try {
             JsonNode root = objectMapper.readTree(rawBody);
             String action = root.path("action").asText(null);
-            String repoFullName = root.path("repository").path("full_name").asText(null);
+            JsonNode repository = root.path("repository");
+            String repoFullName = repository.path("full_name").asText(null);
+            String defaultBranch = repository.path("default_branch").asText(null);
+            String accountLogin = repository.path("owner").path("login").asText(null);
             long prNumber = root.path("number").asLong();
             String headSha = root.path("pull_request").path("head").path("sha").asText(null);
             long installationId = root.path("installation").path("id").asLong();
-            return new PullRequestInfo(repoFullName, prNumber, action, headSha, installationId);
+            return new PullRequestInfo(repoFullName, prNumber, action, headSha, installationId,
+                    accountLogin, defaultBranch);
         } catch (IOException e) {
             throw new IllegalArgumentException("Malformed webhook JSON payload", e);
         }
@@ -189,7 +180,7 @@ public class GithubWebhookService {
 
     /** The subset of a pull_request event we currently use. */
     public record PullRequestInfo(String repoFullName, long prNumber, String action, String headSha,
-                                  long installationId) {
+                                  long installationId, String accountLogin, String defaultBranch) {
 
         /** Owner portion of "owner/repo", or null if unparseable. */
         public String owner() {

@@ -89,3 +89,5 @@ app:
     severity-threshold: ${REVIEW_SEVERITY_THRESHOLD:WARNING}
     # Hard cap on number of findings returned, highest severity first.
     max-findings: ${REVIEW_MAX_FINDINGS:10}
+    # Max number of files from one diff to analyze (one model call per file).
+    max-files: ${REVIEW_MAX_FILES:20}

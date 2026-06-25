@@ -1,15 +1,20 @@
 package com.example.prreviewer.service;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.chat.client.ChatClient;
@@ -20,122 +25,137 @@ import org.springframework.ai.chat.model.Generation;
 import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.core.io.ByteArrayResource;
 
+import com.example.prreviewer.dto.ReviewContext;
 import com.example.prreviewer.dto.ReviewFinding;
 import com.example.prreviewer.dto.ReviewResult;
 import com.example.prreviewer.dto.Severity;
 
 class ReviewServiceTest {
 
-    private static final String SAMPLE_DIFF = """
+    private static final ReviewContext CTX = new ReviewContext("octocat/Hello-World", 42, "abc123");
+
+    // A two-file unified diff.
+    private static final String TWO_FILE_DIFF = """
             diff --git a/Foo.java b/Foo.java
+            index 1111111..2222222 100644
+            --- a/Foo.java
             +++ b/Foo.java
             @@ -1 +1 @@
             +int x = 1 / 0;
+            diff --git a/Bar.java b/Bar.java
+            index 3333333..4444444 100644
+            --- a/Bar.java
+            +++ b/Bar.java
+            @@ -1 +1 @@
+            +String s = null;
             """;
 
     @Test
-    void parsesStructuredFindings() throws IOException {
-        String json = """
-                {
-                  "summary": "One real bug found.",
-                  "findings": [
-                    {"filePath": "Foo.java", "line": 4, "severity": "ERROR",
-                     "title": "Division by zero", "detail": "1 / 0 throws ArithmeticException."},
-                    {"filePath": "Foo.java", "line": 4, "severity": "WARNING",
-                     "title": "Magic number", "detail": "Extract the constant."}
-                  ]
-                }
-                """;
-        ReviewService service = serviceReturning(json, Severity.INFO, 10);
+    void analyzesEachFileInItsOwnModelCall() throws IOException {
+        ChatModel model = mock(ChatModel.class);
+        when(model.call(any(Prompt.class))).thenReturn(
+                resp(finding("ignored", "ERROR", "div by zero")),
+                resp(finding("ignored", "WARNING", "null assignment")));
+        ReviewService service = service(model, Severity.INFO, 10);
 
-        ReviewResult result = service.review(SAMPLE_DIFF);
+        ReviewResult result = service.review(TWO_FILE_DIFF, CTX);
 
-        assertEquals("One real bug found.", result.summary());
+        verify(model, times(2)).call(any(Prompt.class));
         assertEquals(2, result.findings().size());
-        ReviewFinding first = result.findings().get(0);
-        assertEquals("Foo.java", first.filePath());
-        assertEquals(4, first.line());
-        assertEquals(Severity.ERROR, first.severity());
-        assertEquals("Division by zero", first.title());
+        // filePath is forced to the analyzed file, regardless of what the model said.
+        Set<String> paths = result.findings().stream()
+                .map(ReviewFinding::filePath).collect(Collectors.toSet());
+        assertEquals(Set.of("Foo.java", "Bar.java"), paths);
     }
 
     @Test
-    void severityThresholdDropsInfoFindings() throws IOException {
-        String json = """
-                {
-                  "summary": "Mixed.",
-                  "findings": [
-                    {"filePath": "A.java", "line": 1, "severity": "INFO", "title": "nit", "detail": "x"},
-                    {"filePath": "B.java", "line": 2, "severity": "WARNING", "title": "warn", "detail": "y"},
-                    {"filePath": "C.java", "line": 3, "severity": "ERROR", "title": "err", "detail": "z"}
-                  ]
-                }
-                """;
-        ReviewService service = serviceReturning(json, Severity.WARNING, 10);
+    void severityThresholdAppliesAcrossAllFiles() throws IOException {
+        ChatModel model = mock(ChatModel.class);
+        when(model.call(any(Prompt.class))).thenReturn(
+                resp(finding("Foo.java", "INFO", "nit")),
+                resp(finding("Bar.java", "ERROR", "real bug")));
+        ReviewService service = service(model, Severity.WARNING, 10);
 
-        ReviewResult result = service.review(SAMPLE_DIFF);
+        ReviewResult result = service.review(TWO_FILE_DIFF, CTX);
 
-        assertEquals(2, result.findings().size());
-        assertTrue(result.findings().stream().noneMatch(f -> f.severity() == Severity.INFO));
+        assertEquals(1, result.findings().size());
+        assertEquals(Severity.ERROR, result.findings().get(0).severity());
     }
 
     @Test
-    void capsNumberOfFindingsKeepingHighestSeverity() throws IOException {
-        String json = """
-                {
-                  "summary": "Many.",
-                  "findings": [
-                    {"filePath": "A.java", "line": 1, "severity": "INFO", "title": "i1", "detail": "x"},
-                    {"filePath": "B.java", "line": 2, "severity": "ERROR", "title": "e1", "detail": "x"},
-                    {"filePath": "C.java", "line": 3, "severity": "WARNING", "title": "w1", "detail": "x"},
-                    {"filePath": "D.java", "line": 4, "severity": "ERROR", "title": "e2", "detail": "x"},
-                    {"filePath": "E.java", "line": 5, "severity": "INFO", "title": "i2", "detail": "x"}
-                  ]
-                }
-                """;
-        // threshold INFO so nothing is filtered out before the cap takes effect.
-        ReviewService service = serviceReturning(json, Severity.INFO, 3);
+    void findingsCapAppliesAcrossAllFiles() throws IOException {
+        ChatModel model = mock(ChatModel.class);
+        when(model.call(any(Prompt.class))).thenReturn(
+                resp(twoFindings("ERROR", "WARNING")),
+                resp(twoFindings("ERROR", "WARNING")));
+        ReviewService service = service(model, Severity.INFO, 3);
 
-        ReviewResult result = service.review(SAMPLE_DIFF);
+        ReviewResult result = service.review(TWO_FILE_DIFF, CTX);
 
+        // 4 findings produced across 2 files, capped at 3, highest severity kept.
         assertEquals(3, result.findings().size());
-        // The two ERRORs must survive; the lowest-severity INFOs must be dropped.
         assertEquals(2, result.findings().stream().filter(f -> f.severity() == Severity.ERROR).count());
-        assertTrue(result.findings().stream().anyMatch(f -> f.severity() == Severity.WARNING));
     }
 
     @Test
-    void malformedJsonDegradesToEmptyResult() throws IOException {
-        ReviewService service = serviceReturning("this is not json at all", Severity.WARNING, 10);
+    void oneFailingFileDoesNotStopTheOthers() throws IOException {
+        ChatModel model = mock(ChatModel.class);
+        when(model.call(any(Prompt.class))).thenReturn(
+                resp("not valid json"),
+                resp(finding("Bar.java", "ERROR", "real bug")));
+        ReviewService service = service(model, Severity.WARNING, 10);
 
-        ReviewResult result = service.review(SAMPLE_DIFF);
+        ReviewResult result = service.review(TWO_FILE_DIFF, CTX);
 
-        assertTrue(result.findings().isEmpty());
-        assertFalse(result.summary().isBlank());
+        assertEquals(1, result.findings().size());
+        assertEquals("Bar.java", result.findings().get(0).filePath());
     }
 
     @Test
-    void emptyFindingsAreHandled() throws IOException {
-        String json = """
-                {"summary": "Looks good, no significant issues.", "findings": []}
-                """;
-        ReviewService service = serviceReturning(json, Severity.WARNING, 10);
+    void allFilesFailingThrows() throws IOException {
+        ChatModel model = mock(ChatModel.class);
+        when(model.call(any(Prompt.class))).thenReturn(resp("garbage"), resp("garbage"));
+        ReviewService service = service(model, Severity.WARNING, 10);
 
-        ReviewResult result = service.review(SAMPLE_DIFF);
-
-        assertEquals("Looks good, no significant issues.", result.summary());
-        assertTrue(result.findings().isEmpty());
+        assertThrows(ReviewFailedException.class, () -> service.review(TWO_FILE_DIFF, CTX));
     }
 
-    private static ReviewService serviceReturning(String json, Severity threshold, int maxFindings)
+    @Test
+    void emptyDiffReturnsEmptyResultWithoutCallingModel() throws IOException {
+        ChatModel model = mock(ChatModel.class);
+        ReviewService service = service(model, Severity.WARNING, 10);
+
+        ReviewResult result = service.review("   ", CTX);
+
+        assertTrue(result.findings().isEmpty());
+        verify(model, never()).call(any(Prompt.class));
+    }
+
+    private static ReviewService service(ChatModel model, Severity threshold, int maxFindings)
             throws IOException {
-        ChatModel chatModel = mock(ChatModel.class);
-        ChatResponse response = new ChatResponse(List.of(new Generation(new AssistantMessage(json))));
-        when(chatModel.call(any(Prompt.class))).thenReturn(response);
-
         return new ReviewService(
-                ChatClient.builder(chatModel),
+                ChatClient.builder(model),
+                new DiffParser(20),
                 new ByteArrayResource("system prompt".getBytes(StandardCharsets.UTF_8)),
                 12_000, threshold, maxFindings);
+    }
+
+    private static ChatResponse resp(String json) {
+        return new ChatResponse(List.of(new Generation(new AssistantMessage(json))));
+    }
+
+    private static String finding(String path, String severity, String title) {
+        return """
+                {"summary":"s","findings":[
+                  {"filePath":"%s","line":1,"severity":"%s","title":"%s","detail":"d"}
+                ]}""".formatted(path, severity, title);
+    }
+
+    private static String twoFindings(String sev1, String sev2) {
+        return """
+                {"summary":"s","findings":[
+                  {"filePath":"X","line":1,"severity":"%s","title":"a","detail":"d"},
+                  {"filePath":"X","line":2,"severity":"%s","title":"b","detail":"d"}
+                ]}""".formatted(sev1, sev2);
     }
 }
