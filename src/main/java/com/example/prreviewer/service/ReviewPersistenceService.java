@@ -93,4 +93,11 @@ public class ReviewPersistenceService {
             review.setFinishedAt(Instant.now());
         });
     }
+
+    /** Records the GitHub review id once the review has been posted. */
+    @Transactional
+    public void recordGithubReviewId(Long reviewId, Long githubReviewId) {
+        reviewRepository.findById(reviewId)
+                .ifPresent(review -> review.setGithubReviewId(githubReviewId));
+    }
 }

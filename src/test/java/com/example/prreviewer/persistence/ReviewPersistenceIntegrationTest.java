@@ -28,6 +28,7 @@ import com.example.prreviewer.repository.InstallationRepository;
 import com.example.prreviewer.repository.RepositoryRepository;
 import com.example.prreviewer.repository.ReviewCommentRepository;
 import com.example.prreviewer.repository.ReviewRepository;
+import com.example.prreviewer.service.GithubReviewPublisher;
 import com.example.prreviewer.service.GithubWebhookService.PullRequestInfo;
 import com.example.prreviewer.service.ReviewFailedException;
 import com.example.prreviewer.service.ReviewPersistenceService;
@@ -50,6 +51,10 @@ class ReviewPersistenceIntegrationTest {
     // Replace the LLM-backed service so we control success/failure deterministically.
     @MockitoBean
     ReviewService reviewService;
+
+    // Avoid any real GitHub call during processPullRequest tests.
+    @MockitoBean
+    GithubReviewPublisher reviewPublisher;
 
     @Autowired
     ReviewPersistenceService persistence;
@@ -97,6 +102,16 @@ class ReviewPersistenceIntegrationTest {
         assertEquals("Looks risky.", review.getSummary());
         assertNotNull(review.getFinishedAt());
         assertEquals(2, reviewCommentRepository.findByReviewId(reviewId).size());
+    }
+
+    @Test
+    void recordsGithubReviewId() {
+        Long repoId = persistence.upsertRepository(555L, "octocat", "octocat/Hello-World", "main");
+        Long reviewId = persistence.startReview(repoId, 42, "deadbeef");
+
+        persistence.recordGithubReviewId(reviewId, 987654321L);
+
+        assertEquals(987654321L, reviewRepository.findById(reviewId).orElseThrow().getGithubReviewId());
     }
 
     @Test

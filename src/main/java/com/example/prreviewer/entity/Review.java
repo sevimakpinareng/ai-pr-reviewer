@@ -51,6 +51,10 @@ public class Review {
     @Column(name = "finished_at")
     private Instant finishedAt;
 
+    /** Id of the review we posted to GitHub; null until (and unless) posted. */
+    @Column(name = "github_review_id")
+    private Long githubReviewId;
+
     @OneToMany(mappedBy = "review", cascade = CascadeType.ALL, orphanRemoval = true)
     private List<ReviewComment> comments = new ArrayList<>();
 
@@ -120,6 +124,14 @@ public class Review {
 
     public void setFinishedAt(Instant finishedAt) {
         this.finishedAt = finishedAt;
+    }
+
+    public Long getGithubReviewId() {
+        return githubReviewId;
+    }
+
+    public void setGithubReviewId(Long githubReviewId) {
+        this.githubReviewId = githubReviewId;
     }
 
     public List<ReviewComment> getComments() {

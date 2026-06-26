@@ -91,3 +91,5 @@ app:
     max-findings: ${REVIEW_MAX_FINDINGS:10}
     # Max number of files from one diff to analyze (one model call per file).
     max-files: ${REVIEW_MAX_FILES:20}
+    # When there are no findings, still post a short "no issues" review.
+    post-empty-review: ${REVIEW_POST_EMPTY:true}
