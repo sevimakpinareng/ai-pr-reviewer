@@ -17,5 +17,23 @@ services:
       timeout: 5s
       retries: 5
 
+  rabbitmq:
+    image: rabbitmq:3.13-management
+    container_name: prreviewer-rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-prreviewer}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-prreviewer}
+    ports:
+      - "${RABBITMQ_PORT:-5672}:5672"    # AMQP
+      - "${RABBITMQ_MGMT_PORT:-15672}:15672"  # management UI
+    volumes:
+      - rabbitmqdata:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
 volumes:
   pgdata:
+  rabbitmqdata:

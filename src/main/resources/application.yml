@@ -2,6 +2,33 @@ spring:
   application:
     name: pr-reviewer
 
+  # Async work queue. Connection + listener retry are enabled so the app starts
+  # cleanly even if RabbitMQ isn't ready yet, and transient processing failures
+  # are retried before dead-lettering.
+  rabbitmq:
+    host: ${RABBITMQ_HOST:localhost}
+    port: ${RABBITMQ_PORT:5672}
+    username: ${RABBITMQ_USER:prreviewer}
+    password: ${RABBITMQ_PASSWORD:prreviewer}
+    template:
+      retry:
+        enabled: true
+        initial-interval: 1s
+        multiplier: 2
+        max-attempts: 3
+    listener:
+      simple:
+        concurrency: ${RABBITMQ_CONCURRENCY_MIN:1}
+        max-concurrency: ${RABBITMQ_CONCURRENCY_MAX:3}
+        # Exhausted retries -> reject without requeue -> dead-letter (never loop).
+        default-requeue-rejected: false
+        retry:
+          enabled: true
+          max-attempts: 3
+          initial-interval: 1s
+          multiplier: 2
+          max-interval: 10s
+
   # AI review. Default provider is local Ollama (free during development);
   # activate the "mistral" profile (SPRING_PROFILES_ACTIVE=mistral) to use the
   # hosted Mistral AI API instead. `model.chat` selects exactly one provider so

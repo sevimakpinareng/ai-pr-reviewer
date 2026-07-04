@@ -5,7 +5,6 @@ import java.nio.charset.StandardCharsets;
 import java.security.InvalidKeyException;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
-import java.util.Arrays;
 import java.util.HexFormat;
 import java.util.Set;
 
@@ -14,18 +13,20 @@ import javax.crypto.spec.SecretKeySpec;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
+import com.example.prreviewer.config.RabbitConfig;
+import com.example.prreviewer.dto.ReviewJobMessage;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 /**
- * Verifies GitHub webhook signatures and dispatches events.
- * <p>
- * All HTTP plumbing lives in the controller; this class owns the security
- * (signature check) and the event-handling logic so it can be unit-tested
- * without a running web server.
+ * Verifies GitHub webhook signatures and turns reviewable events into queued
+ * jobs. This is the producer side: it does NO heavy work (no diff fetch, no
+ * analysis, no DB, no GitHub calls). For a relevant pull_request it publishes a
+ * small {@link ReviewJobMessage} and returns, so the webhook can answer fast.
  */
 @Service
 public class GithubWebhookService {
@@ -38,21 +39,15 @@ public class GithubWebhookService {
     /** pull_request actions we care about; everything else is ignored. */
     private static final Set<String> RELEVANT_ACTIONS = Set.of("opened", "synchronize", "reopened");
 
-    /** How many leading diff lines to log as a preview. */
-    private static final int DIFF_PREVIEW_LINES = 30;
-
     private final ObjectMapper objectMapper;
-    private final GithubApiClient githubApiClient;
-    private final ReviewProcessingService reviewProcessingService;
+    private final RabbitTemplate rabbitTemplate;
     private final String webhookSecret;
 
     public GithubWebhookService(ObjectMapper objectMapper,
-                                GithubApiClient githubApiClient,
-                                ReviewProcessingService reviewProcessingService,
+                                RabbitTemplate rabbitTemplate,
                                 @Value("${github.webhook.secret:}") String webhookSecret) {
         this.objectMapper = objectMapper;
-        this.githubApiClient = githubApiClient;
-        this.reviewProcessingService = reviewProcessingService;
+        this.rabbitTemplate = rabbitTemplate;
         this.webhookSecret = webhookSecret;
     }
 
@@ -83,67 +78,40 @@ public class GithubWebhookService {
     }
 
     /**
-     * Handles an already-authenticated event. Only {@code pull_request} events
-     * are inspected; everything else is just acknowledged in the log.
+     * Handles an already-authenticated event. For a relevant {@code pull_request}
+     * it publishes one {@link ReviewJobMessage}; everything else is just logged.
+     *
+     * @param deliveryId the {@code X-GitHub-Delivery} id, carried through for tracing
      */
-    public void handleEvent(String eventType, byte[] rawBody) {
+    public void handleEvent(String eventType, String deliveryId, byte[] rawBody) {
         if (eventType == null || eventType.isBlank()) {
-            log.warn("Webhook with missing X-GitHub-Event header; ignoring");
+            log.warn("Webhook with missing X-GitHub-Event header (delivery={}); ignoring", deliveryId);
             return;
         }
 
         if (!"pull_request".equals(eventType)) {
-            log.info("alındı: {}", eventType);
+            log.info("alındı: {} (delivery={})", eventType, deliveryId);
             return;
         }
 
         PullRequestInfo info = parsePullRequest(rawBody);
         if (!RELEVANT_ACTIONS.contains(info.action())) {
-            log.info("pull_request action '{}' ignored (repo={} pr=#{})",
-                    info.action(), info.repoFullName(), info.prNumber());
+            log.info("pull_request action '{}' ignored (repo={} pr=#{} delivery={})",
+                    info.action(), info.repoFullName(), info.prNumber(), deliveryId);
+            return;
+        }
+        if (info.owner() == null || info.repo() == null || info.installationId() <= 0) {
+            log.warn("pull_request missing installation/repo info; not queued (repo={} delivery={})",
+                    info.repoFullName(), deliveryId);
             return;
         }
 
-        log.info("pull_request {} -> repo={} pr=#{} headSha={}",
-                info.action(), info.repoFullName(), info.prNumber(), info.headSha());
-        fetchAndLogDiff(info);
-    }
-
-    /**
-     * Best-effort diff fetch. Any failure (auth, network, GitHub error) is
-     * logged and swallowed so a single bad delivery never takes the app down.
-     * There is no queue/retry yet — that comes in a later step.
-     */
-    private void fetchAndLogDiff(PullRequestInfo info) {
-        String owner = info.owner();
-        String repo = info.repo();
-        if (owner == null || repo == null || info.installationId() <= 0) {
-            log.warn("Cannot fetch diff: missing installation/repo info (repo={} installationId={})",
-                    info.repoFullName(), info.installationId());
-            return;
-        }
-
-        try {
-            String diff = githubApiClient.fetchPullRequestDiff(
-                    info.installationId(), owner, repo, (int) info.prNumber());
-            int byteSize = diff == null ? 0 : diff.getBytes(StandardCharsets.UTF_8).length;
-            log.info("Fetched diff for {} #{}: {} bytes", info.repoFullName(), info.prNumber(), byteSize);
-            if (diff != null && !diff.isEmpty()) {
-                log.info("Diff preview ({} #{}), first {} lines:\n{}",
-                        info.repoFullName(), info.prNumber(), DIFF_PREVIEW_LINES, previewLines(diff));
-                // Hand off to the review + persistence orchestration.
-                reviewProcessingService.processPullRequest(info, diff);
-            }
-        } catch (Exception e) {
-            log.error("Failed to fetch diff for {} #{}: {}",
-                    info.repoFullName(), info.prNumber(), e.getMessage(), e);
-        }
-    }
-
-    private static String previewLines(String diff) {
-        String[] lines = diff.split("\n", -1);
-        int count = Math.min(DIFF_PREVIEW_LINES, lines.length);
-        return String.join("\n", Arrays.copyOfRange(lines, 0, count));
+        ReviewJobMessage job = new ReviewJobMessage(
+                info.installationId(), info.owner(), info.repo(), (int) info.prNumber(),
+                info.headSha(), info.action(), deliveryId);
+        rabbitTemplate.convertAndSend(RabbitConfig.EXCHANGE, RabbitConfig.ROUTING_KEY, job);
+        log.info("Queued review job: repo={} pr=#{} action={} delivery={}",
+                info.repoFullName(), info.prNumber(), info.action(), deliveryId);
     }
 
     /**

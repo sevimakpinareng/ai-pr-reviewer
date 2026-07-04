@@ -3,7 +3,12 @@ package com.example.prreviewer.service;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -13,7 +18,11 @@ import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
 
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
+import org.springframework.amqp.rabbit.core.RabbitTemplate;
 
+import com.example.prreviewer.config.RabbitConfig;
+import com.example.prreviewer.dto.ReviewJobMessage;
 import com.example.prreviewer.service.GithubWebhookService.PullRequestInfo;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
@@ -21,8 +30,9 @@ class GithubWebhookServiceTest {
 
     private static final String SECRET = "mysecret";
 
-    private final GithubWebhookService service = new GithubWebhookService(
-            new ObjectMapper(), mock(GithubApiClient.class), mock(ReviewProcessingService.class), SECRET);
+    private final RabbitTemplate rabbitTemplate = mock(RabbitTemplate.class);
+    private final GithubWebhookService service =
+            new GithubWebhookService(new ObjectMapper(), rabbitTemplate, SECRET);
 
     @Test
     void acceptsValidSignature() throws IOException {
@@ -62,8 +72,42 @@ class GithubWebhookServiceTest {
         assertEquals(12345678L, info.installationId());
         assertEquals("octocat", info.owner());
         assertEquals("Hello-World", info.repo());
-        assertEquals("octocat", info.accountLogin());
-        assertEquals("main", info.defaultBranch());
+    }
+
+    @Test
+    void publishesJobForRelevantPullRequest() throws IOException {
+        service.handleEvent("pull_request", "delivery-123", payload());
+
+        ArgumentCaptor<ReviewJobMessage> captor = ArgumentCaptor.forClass(ReviewJobMessage.class);
+        verify(rabbitTemplate).convertAndSend(
+                eq(RabbitConfig.EXCHANGE), eq(RabbitConfig.ROUTING_KEY), captor.capture());
+
+        ReviewJobMessage job = captor.getValue();
+        assertEquals(12345678L, job.installationId());
+        assertEquals("octocat", job.owner());
+        assertEquals("Hello-World", job.repo());
+        assertEquals(42, job.prNumber());
+        assertEquals("6dcb09b5b57875f334f61aebed695e2e4193db5e", job.commitSha());
+        assertEquals("opened", job.action());
+        assertEquals("delivery-123", job.deliveryId());
+    }
+
+    @Test
+    void doesNotPublishForIrrelevantAction() throws IOException {
+        byte[] closed = new String(payload(), StandardCharsets.UTF_8)
+                .replace("\"action\": \"opened\"", "\"action\": \"closed\"")
+                .getBytes(StandardCharsets.UTF_8);
+
+        service.handleEvent("pull_request", "d", closed);
+
+        verify(rabbitTemplate, never()).convertAndSend(anyString(), anyString(), any(Object.class));
+    }
+
+    @Test
+    void doesNotPublishForNonPullRequestEvent() throws IOException {
+        service.handleEvent("issues", "d", payload());
+
+        verify(rabbitTemplate, never()).convertAndSend(anyString(), anyString(), any(Object.class));
     }
 
     private static byte[] payload() throws IOException {

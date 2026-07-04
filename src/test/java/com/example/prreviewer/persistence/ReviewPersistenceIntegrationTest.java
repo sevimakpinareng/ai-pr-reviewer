@@ -14,6 +14,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
+import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
@@ -42,6 +43,8 @@ import com.example.prreviewer.service.ReviewService;
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.NONE)
 @Testcontainers
+// No RabbitMQ broker here; don't let the listener container try to connect.
+@TestPropertySource(properties = "spring.rabbitmq.listener.simple.auto-startup=false")
 class ReviewPersistenceIntegrationTest {
 
     @Container
