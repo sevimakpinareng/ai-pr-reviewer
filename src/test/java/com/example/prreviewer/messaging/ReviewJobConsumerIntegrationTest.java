@@ -22,8 +22,11 @@ import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
+import org.springframework.test.context.DynamicPropertyRegistry;
+import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.containers.RabbitMQContainer;
 import org.testcontainers.junit.jupiter.Container;
@@ -56,6 +59,16 @@ class ReviewJobConsumerIntegrationTest {
     @ServiceConnection
     static final RabbitMQContainer RABBIT = new RabbitMQContainer("rabbitmq:3.13-management");
 
+    @Container
+    static final GenericContainer<?> REDIS =
+            new GenericContainer<>("redis:7-alpine").withExposedPorts(6379);
+
+    @DynamicPropertySource
+    static void redisProperties(DynamicPropertyRegistry registry) {
+        registry.add("spring.data.redis.host", REDIS::getHost);
+        registry.add("spring.data.redis.port", () -> REDIS.getMappedPort(6379));
+    }
+
     @MockitoBean
     GithubApiClient githubApiClient;
 
@@ -79,7 +92,7 @@ class ReviewJobConsumerIntegrationTest {
         when(githubApiClient.fetchPullRequestDiff(555L, "octocat", "Hello-World", 42))
                 .thenReturn("diff --git a/Foo.java b/Foo.java\n+x");
 
-        publish(job());
+        publish(job("delivery-ok"));
 
         await().atMost(Duration.ofSeconds(15)).untilAsserted(() ->
                 verify(processing).processPullRequest(any(), eq("diff --git a/Foo.java b/Foo.java\n+x")));
@@ -92,14 +105,14 @@ class ReviewJobConsumerIntegrationTest {
         // Transient failure on every attempt -> retried, then dead-lettered.
         doThrow(new RuntimeException("boom")).when(processing).processPullRequest(any(), any());
 
-        publish(job());
+        publish(job("delivery-retry"));
 
         await().atMost(Duration.ofSeconds(20)).untilAsserted(() -> {
             Object dead = rabbitTemplate.receiveAndConvert(RabbitConfig.DLQ);
             assertNotNull(dead, "expected the job in the DLQ");
             assertInstanceOf(ReviewJobMessage.class, dead);
         });
-        // Attempted maxAttempts times before dead-lettering.
+        // Attempted maxAttempts times before dead-lettering (dedupe never blocked it).
         verify(processing, times(3)).processPullRequest(any(), any());
     }
 
@@ -107,7 +120,7 @@ class ReviewJobConsumerIntegrationTest {
         rabbitTemplate.convertAndSend(RabbitConfig.EXCHANGE, RabbitConfig.ROUTING_KEY, job);
     }
 
-    private static ReviewJobMessage job() {
-        return new ReviewJobMessage(555L, "octocat", "Hello-World", 42, "sha123", "opened", "delivery-1");
+    private static ReviewJobMessage job(String deliveryId) {
+        return new ReviewJobMessage(555L, "octocat", "Hello-World", 42, "sha123", "opened", deliveryId);
     }
 }

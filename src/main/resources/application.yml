@@ -29,6 +29,19 @@ spring:
           multiplier: 2
           max-interval: 10s
 
+  # Redis for dedupe / superseding / rate limiting. Short timeouts so calls fail
+  # fast (and fall back gracefully) if Redis is unavailable.
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      timeout: 2s
+      connect-timeout: 2s
+      # We use Redis only via StringRedisTemplate (no @RedisHash repositories);
+      # disable Redis repository scanning so it doesn't inspect the JPA repos.
+      repositories:
+        enabled: false
+
   # AI review. Default provider is local Ollama (free during development);
   # activate the "mistral" profile (SPRING_PROFILES_ACTIVE=mistral) to use the
   # hosted Mistral AI API instead. `model.chat` selects exactly one provider so
@@ -107,8 +120,21 @@ github:
     # Used to verify the HMAC-SHA256 signature of every incoming delivery.
     secret: ${GITHUB_WEBHOOK_SECRET:}
 
-# Review tuning (noise control).
+# Dedupe / superseding / rate limiting (all backed by Redis).
 app:
+  dedupe:
+    # A processed delivery id is remembered this long, then may recur harmlessly.
+    ttl: ${DEDUPE_TTL:6h}
+  supersede:
+    # How long we remember the latest commit seen per PR.
+    ttl: ${SUPERSEDE_TTL:2d}
+  ratelimit:
+    # Max reviews per installation per window; over-limit jobs are requeued.
+    limit: ${RATELIMIT_LIMIT:30}
+    window: ${RATELIMIT_WINDOW:1m}
+    requeue-delay: ${RATELIMIT_REQUEUE_DELAY:500ms}
+
+  # Review tuning (noise control).
   review:
     # Cap on diff size sent to the model (crude; real chunking comes later).
     max-diff-chars: ${REVIEW_MAX_DIFF_CHARS:12000}

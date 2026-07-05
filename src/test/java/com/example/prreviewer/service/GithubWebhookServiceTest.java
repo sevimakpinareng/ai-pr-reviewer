@@ -31,8 +31,9 @@ class GithubWebhookServiceTest {
     private static final String SECRET = "mysecret";
 
     private final RabbitTemplate rabbitTemplate = mock(RabbitTemplate.class);
+    private final PrSupersedingService supersedingService = mock(PrSupersedingService.class);
     private final GithubWebhookService service =
-            new GithubWebhookService(new ObjectMapper(), rabbitTemplate, SECRET);
+            new GithubWebhookService(new ObjectMapper(), rabbitTemplate, supersedingService, SECRET);
 
     @Test
     void acceptsValidSignature() throws IOException {
@@ -90,6 +91,10 @@ class GithubWebhookServiceTest {
         assertEquals("6dcb09b5b57875f334f61aebed695e2e4193db5e", job.commitSha());
         assertEquals("opened", job.action());
         assertEquals("delivery-123", job.deliveryId());
+
+        // Latest commit is recorded (for superseding) before the job is published.
+        verify(supersedingService).recordLatestCommit(
+                "octocat", "Hello-World", 42, "6dcb09b5b57875f334f61aebed695e2e4193db5e");
     }
 
     @Test

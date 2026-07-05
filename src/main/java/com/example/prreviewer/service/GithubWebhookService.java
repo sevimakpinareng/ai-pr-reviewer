@@ -41,13 +41,16 @@ public class GithubWebhookService {
 
     private final ObjectMapper objectMapper;
     private final RabbitTemplate rabbitTemplate;
+    private final PrSupersedingService supersedingService;
     private final String webhookSecret;
 
     public GithubWebhookService(ObjectMapper objectMapper,
                                 RabbitTemplate rabbitTemplate,
+                                PrSupersedingService supersedingService,
                                 @Value("${github.webhook.secret:}") String webhookSecret) {
         this.objectMapper = objectMapper;
         this.rabbitTemplate = rabbitTemplate;
+        this.supersedingService = supersedingService;
         this.webhookSecret = webhookSecret;
     }
 
@@ -105,6 +108,11 @@ public class GithubWebhookService {
                     info.repoFullName(), deliveryId);
             return;
         }
+
+        // Record the latest commit BEFORE publishing, so a consumer that later
+        // picks up an older job for this PR can detect it has been superseded.
+        supersedingService.recordLatestCommit(
+                info.owner(), info.repo(), (int) info.prNumber(), info.headSha());
 
         ReviewJobMessage job = new ReviewJobMessage(
                 info.installationId(), info.owner(), info.repo(), (int) info.prNumber(),

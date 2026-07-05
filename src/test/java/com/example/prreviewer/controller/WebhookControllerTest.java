@@ -28,6 +28,7 @@ import org.springframework.test.web.servlet.MockMvc;
 import com.example.prreviewer.config.RabbitConfig;
 import com.example.prreviewer.dto.ReviewJobMessage;
 import com.example.prreviewer.service.GithubWebhookService;
+import com.example.prreviewer.service.PrSupersedingService;
 
 @WebMvcTest(WebhookController.class)
 @Import(GithubWebhookService.class)
@@ -42,6 +43,10 @@ class WebhookControllerTest {
     // The producer publishes through this; mocked so the test needs no broker.
     @MockitoBean
     private RabbitTemplate rabbitTemplate;
+
+    // The producer records the latest commit here; mocked so no Redis is needed.
+    @MockitoBean
+    private PrSupersedingService supersedingService;
 
     @Test
     void validSignatureQueuesJobAndReturns200() throws Exception {
