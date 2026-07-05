@@ -6,11 +6,14 @@ import org.springframework.amqp.core.DirectExchange;
 import org.springframework.amqp.core.FanoutExchange;
 import org.springframework.amqp.core.Queue;
 import org.springframework.amqp.core.QueueBuilder;
+import org.springframework.amqp.rabbit.retry.MessageRecoverer;
+import org.springframework.amqp.rabbit.retry.RejectAndDontRequeueRecoverer;
 import org.springframework.amqp.support.converter.Jackson2JsonMessageConverter;
 import org.springframework.amqp.support.converter.MessageConverter;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
+import com.example.prreviewer.metrics.ReviewMetrics;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 /**
@@ -72,5 +75,20 @@ public class RabbitConfig {
     @Bean
     MessageConverter jacksonMessageConverter(ObjectMapper objectMapper) {
         return new Jackson2JsonMessageConverter(objectMapper);
+    }
+
+    /**
+     * When the listener's retries are exhausted, count the dead-letter (metric)
+     * then delegate to the default recoverer, which rejects the message so it
+     * routes to the DLQ. (Permanent errors bypass retry and are counted by the
+     * consumer directly, so this only sees retry-exhaustion.)
+     */
+    @Bean
+    MessageRecoverer dlqMeteringRecoverer(ReviewMetrics metrics) {
+        RejectAndDontRequeueRecoverer delegate = new RejectAndDontRequeueRecoverer();
+        return (message, cause) -> {
+            metrics.recordDeadLetter("retries_exhausted");
+            delegate.recover(message, cause);
+        };
     }
 }

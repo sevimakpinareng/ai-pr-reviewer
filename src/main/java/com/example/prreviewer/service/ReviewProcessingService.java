@@ -2,11 +2,16 @@ package com.example.prreviewer.service;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.slf4j.MDC;
 import org.springframework.stereotype.Service;
 
 import com.example.prreviewer.dto.ReviewContext;
 import com.example.prreviewer.dto.ReviewResult;
+import com.example.prreviewer.metrics.ReviewMetrics;
+import com.example.prreviewer.metrics.ReviewOutcome;
 import com.example.prreviewer.service.GithubWebhookService.PullRequestInfo;
+
+import io.micrometer.core.instrument.Timer;
 
 /**
  * Orchestrates one PR review end to end: persist a PROCESSING review, run the
@@ -24,20 +29,28 @@ public class ReviewProcessingService {
     private final ReviewPersistenceService persistence;
     private final ReviewService reviewService;
     private final GithubReviewPublisher reviewPublisher;
+    private final ReviewMetrics metrics;
 
     public ReviewProcessingService(ReviewPersistenceService persistence,
                                    ReviewService reviewService,
-                                   GithubReviewPublisher reviewPublisher) {
+                                   GithubReviewPublisher reviewPublisher,
+                                   ReviewMetrics metrics) {
         this.persistence = persistence;
         this.reviewService = reviewService;
         this.reviewPublisher = reviewPublisher;
+        this.metrics = metrics;
     }
 
     public void processPullRequest(PullRequestInfo info, String rawDiff) {
         int prNumber = (int) info.prNumber();
+        // Timer starts at processing entry (right after the job was received) and
+        // stops after the review has been posted to GitHub.
+        Timer.Sample sample = metrics.startSample();
+
         Long repositoryId = persistence.upsertRepository(
                 info.installationId(), info.accountLogin(), info.repoFullName(), info.defaultBranch());
         Long reviewId = persistence.startReview(repositoryId, prNumber, info.headSha());
+        MDC.put("reviewId", String.valueOf(reviewId)); // cleared by the consumer's finally
         log.info("Review {} started (PROCESSING) for {} #{} @ {}",
                 reviewId, info.repoFullName(), prNumber, info.headSha());
 
@@ -52,11 +65,15 @@ public class ReviewProcessingService {
             log.error("Review {} FAILED for {} #{}: {}",
                     reviewId, info.repoFullName(), prNumber, e.getMessage(), e);
             persistence.failReview(reviewId);
+            metrics.recordProcessed(ReviewOutcome.FAILED);
             return;
         }
 
+        metrics.recordFindings(result.findings().size());
         // Posting is best-effort: a failure here leaves the review DONE in our DB.
         publishToGithub(info, prNumber, reviewId, result, rawDiff);
+        metrics.recordProcessed(ReviewOutcome.DONE);
+        metrics.stopReview(sample);
     }
 
     private void publishToGithub(PullRequestInfo info, int prNumber, Long reviewId,

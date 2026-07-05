@@ -132,7 +132,9 @@ class GithubReviewPublisherTest {
         GithubAppAuthService auth = mock(GithubAppAuthService.class);
         when(auth.getInstallationToken(7L)).thenReturn("ghs_token");
         RestClient restClient = RestClient.builder().baseUrl(server.url("/").toString()).build();
-        GithubApiClient apiClient = new GithubApiClient(restClient, auth);
+        GithubApiClient apiClient = new GithubApiClient(
+                restClient, auth, new com.example.prreviewer.metrics.ReviewMetrics(
+                        new io.micrometer.core.instrument.simple.SimpleMeterRegistry()));
         DiffLineMapper mapper = new DiffLineMapper(new DiffParser(20));
         return new GithubReviewPublisher(apiClient, mapper, postEmpty);
     }

@@ -29,6 +29,9 @@ import com.example.prreviewer.dto.ReviewContext;
 import com.example.prreviewer.dto.ReviewFinding;
 import com.example.prreviewer.dto.ReviewResult;
 import com.example.prreviewer.dto.Severity;
+import com.example.prreviewer.metrics.ReviewMetrics;
+
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 
 class ReviewServiceTest {
 
@@ -136,6 +139,7 @@ class ReviewServiceTest {
         return new ReviewService(
                 ChatClient.builder(model),
                 new DiffParser(20),
+                new ReviewMetrics(new SimpleMeterRegistry()),
                 new ByteArrayResource("system prompt".getBytes(StandardCharsets.UTF_8)),
                 12_000, threshold, maxFindings);
     }

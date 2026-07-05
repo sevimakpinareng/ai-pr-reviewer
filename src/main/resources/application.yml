@@ -89,16 +89,19 @@ spring:
     locations: classpath:db/migration
     baseline-on-migrate: true
 
-# Expose Actuator health (and info) over HTTP. Show full health details so the
-# DB connection status is visible during local development.
+# Expose Actuator health, info, metrics, and the Prometheus scrape endpoint.
 management:
   endpoints:
     web:
       exposure:
-        include: health,info
+        include: health,info,metrics,prometheus
   endpoint:
     health:
       show-details: always
+  prometheus:
+    metrics:
+      export:
+        enabled: true
 
 # Swagger UI served at /swagger-ui.html, OpenAPI JSON at /v3/api-docs
 springdoc:
@@ -122,6 +125,15 @@ github:
 
 # Dedupe / superseding / rate limiting (all backed by Redis).
 app:
+  # Outbound HTTP timeouts so no external call hangs forever. LLM read timeout is
+  # long because model responses are slow; GitHub's is short.
+  http:
+    github:
+      connect-timeout: ${GITHUB_CONNECT_TIMEOUT:5s}
+      read-timeout: ${GITHUB_READ_TIMEOUT:15s}
+    llm:
+      connect-timeout: ${LLM_CONNECT_TIMEOUT:5s}
+      read-timeout: ${LLM_READ_TIMEOUT:120s}
   dedupe:
     # A processed delivery id is remembered this long, then may recur harmlessly.
     ttl: ${DEDUPE_TTL:6h}

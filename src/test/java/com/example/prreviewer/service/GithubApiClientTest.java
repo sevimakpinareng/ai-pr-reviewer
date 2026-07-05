@@ -48,7 +48,9 @@ class GithubApiClientTest {
         when(authService.getInstallationToken(12345678L)).thenReturn("ghs_installationtoken");
 
         RestClient restClient = RestClient.builder().baseUrl(server.url("/").toString()).build();
-        GithubApiClient client = new GithubApiClient(restClient, authService);
+        GithubApiClient client = new GithubApiClient(
+                restClient, authService, new com.example.prreviewer.metrics.ReviewMetrics(
+                        new io.micrometer.core.instrument.simple.SimpleMeterRegistry()));
 
         String diff = client.fetchPullRequestDiff(12345678L, "octocat", "Hello-World", 42);
 

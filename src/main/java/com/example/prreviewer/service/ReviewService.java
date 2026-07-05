@@ -5,6 +5,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -18,6 +19,9 @@ import com.example.prreviewer.dto.ReviewContext;
 import com.example.prreviewer.dto.ReviewFinding;
 import com.example.prreviewer.dto.ReviewResult;
 import com.example.prreviewer.dto.Severity;
+import com.example.prreviewer.metrics.ReviewMetrics;
+
+import io.micrometer.core.instrument.Timer;
 
 /**
  * Sends a diff to an LLM (via Spring AI), file by file, and returns structured
@@ -34,21 +38,30 @@ public class ReviewService {
 
     private static final Logger log = LoggerFactory.getLogger(ReviewService.class);
 
+    /** Log a warning once the LLM has failed this many times in a row. */
+    private static final int LLM_UNHEALTHY_STREAK = 5;
+
     private final ChatClient chatClient;
     private final DiffParser diffParser;
+    private final ReviewMetrics metrics;
     private final String systemPrompt;
     private final int maxDiffChars;
     private final Severity severityThreshold;
     private final int maxFindings;
 
+    // Lightweight health signal: consecutive LLM failures (not a full breaker).
+    private final AtomicInteger consecutiveLlmErrors = new AtomicInteger();
+
     public ReviewService(ChatClient.Builder chatClientBuilder,
                          DiffParser diffParser,
+                         ReviewMetrics metrics,
                          @Value("classpath:prompts/review-system.txt") Resource systemPromptResource,
                          @Value("${app.review.max-diff-chars:12000}") int maxDiffChars,
                          @Value("${app.review.severity-threshold:WARNING}") Severity severityThreshold,
                          @Value("${app.review.max-findings:10}") int maxFindings) throws IOException {
         this.chatClient = chatClientBuilder.build();
         this.diffParser = diffParser;
+        this.metrics = metrics;
         this.systemPrompt = systemPromptResource.getContentAsString(StandardCharsets.UTF_8);
         this.maxDiffChars = maxDiffChars;
         this.severityThreshold = severityThreshold;
@@ -123,16 +136,28 @@ public class ReviewService {
             diff = diff.substring(0, maxDiffChars);
         }
 
-        ReviewResult result = chatClient.prompt()
-                .system(systemPrompt)
-                .user(diff)
-                .call()
-                .entity(ReviewResult.class);
-
-        if (result == null) {
-            throw new IllegalStateException("Model returned no structured result");
+        Timer.Sample sample = metrics.startSample();
+        try {
+            ReviewResult result = chatClient.prompt()
+                    .system(systemPrompt)
+                    .user(diff)
+                    .call()
+                    .entity(ReviewResult.class);
+            if (result == null) {
+                throw new IllegalStateException("Model returned no structured result");
+            }
+            consecutiveLlmErrors.set(0);
+            return result;
+        } catch (RuntimeException e) {
+            metrics.recordLlmError();
+            int streak = consecutiveLlmErrors.incrementAndGet();
+            if (streak >= LLM_UNHEALTHY_STREAK) {
+                log.warn("LLM has failed {} times in a row; it may be unhealthy", streak);
+            }
+            throw e;
+        } finally {
+            metrics.stopLlmCall(sample);
         }
-        return result;
     }
 
     private static ReviewFinding withFilePath(ReviewFinding finding, String filePath) {
