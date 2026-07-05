@@ -26,6 +26,7 @@ import org.springframework.amqp.ImmediateRequeueAmqpException;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.client.HttpClientErrorException;
+import org.springframework.web.client.HttpServerErrorException;
 
 import com.example.prreviewer.dto.ReviewJobMessage;
 import com.example.prreviewer.metrics.ReviewMetrics;
@@ -144,13 +145,27 @@ class ReviewJobConsumerTest {
     }
 
     @Test
-    void permanentErrorGoesToDlqAndIsNotMarked() {
+    void permanentClientErrorGoesToDlqWithoutRetry() {
         when(githubApiClient.fetchPullRequestDiff(anyLong(), anyString(), anyString(), anyInt()))
                 .thenThrow(HttpClientErrorException.create(
                         HttpStatus.NOT_FOUND, "Not Found", HttpHeaders.EMPTY,
                         new byte[0], StandardCharsets.UTF_8));
 
+        // 4xx -> AmqpRejectAndDontRequeueException: straight to DLQ, no retry.
         assertThrows(AmqpRejectAndDontRequeueException.class, () -> consumer.onReviewJob(JOB));
+
+        verify(idempotency, never()).markProcessed(anyString());
+    }
+
+    @Test
+    void transientServerErrorIsRethrownForRetry() {
+        when(githubApiClient.fetchPullRequestDiff(anyLong(), anyString(), anyString(), anyInt()))
+                .thenThrow(HttpServerErrorException.create(
+                        HttpStatus.SERVICE_UNAVAILABLE, "Unavailable", HttpHeaders.EMPTY,
+                        new byte[0], StandardCharsets.UTF_8));
+
+        // 5xx -> original exception propagates so the listener retries (then DLQ).
+        assertThrows(HttpServerErrorException.class, () -> consumer.onReviewJob(JOB));
 
         verify(idempotency, never()).markProcessed(anyString());
     }

@@ -10,6 +10,7 @@ import static org.mockito.Mockito.when;
 import java.util.List;
 
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -45,6 +46,7 @@ import com.example.prreviewer.service.ReviewService;
 @Testcontainers
 // No RabbitMQ broker here; don't let the listener container try to connect.
 @TestPropertySource(properties = "spring.rabbitmq.listener.simple.auto-startup=false")
+@Tag("integration")
 class ReviewPersistenceIntegrationTest {
 
     @Container

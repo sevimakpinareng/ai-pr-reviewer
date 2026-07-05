@@ -16,6 +16,7 @@ import static org.mockito.Mockito.when;
 import java.time.Duration;
 
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.amqp.rabbit.core.RabbitAdmin;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
@@ -49,6 +50,7 @@ import com.example.prreviewer.service.ReviewProcessingService;
         "spring.rabbitmq.listener.simple.retry.initial-interval=150ms",
         "spring.rabbitmq.listener.simple.retry.max-interval=300ms"
 })
+@Tag("integration")
 class ReviewJobConsumerIntegrationTest {
 
     @Container

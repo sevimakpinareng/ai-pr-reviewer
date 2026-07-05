@@ -54,6 +54,14 @@ class GithubWebhookServiceTest {
     }
 
     @Test
+    void rejectsSignatureWithoutSha256Prefix() throws IOException {
+        byte[] body = payload();
+        // Correct HMAC hex but missing the "sha256=" scheme prefix GitHub sends.
+        String bareHex = hmacHex(SECRET, body);
+        assertFalse(service.isValidSignature(body, bareHex));
+    }
+
+    @Test
     void rejectsTamperedBody() throws IOException {
         byte[] body = payload();
         String sig = "sha256=" + hmacHex(SECRET, body);

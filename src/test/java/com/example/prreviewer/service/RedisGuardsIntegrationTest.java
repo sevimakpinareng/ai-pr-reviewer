@@ -1,5 +1,6 @@
 package com.example.prreviewer.service;
 
+import static org.awaitility.Awaitility.await;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -8,6 +9,7 @@ import java.time.Duration;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.data.redis.connection.lettuce.LettuceConnectionFactory;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -20,6 +22,7 @@ import org.testcontainers.junit.jupiter.Testcontainers;
  * Wires the services directly (no Spring context) for a fast, focused check.
  */
 @Testcontainers
+@Tag("integration")
 class RedisGuardsIntegrationTest {
 
     @Container
@@ -69,7 +72,7 @@ class RedisGuardsIntegrationTest {
     }
 
     @Test
-    void rateLimiterEnforcesFixedWindow() throws InterruptedException {
+    void rateLimiterEnforcesFixedWindow() {
         ReviewRateLimiter limiter = new ReviewRateLimiter(redis, 3, Duration.ofSeconds(1));
 
         assertTrue(limiter.tryAcquire(7L));
@@ -80,8 +83,8 @@ class RedisGuardsIntegrationTest {
         // A different installation has its own budget.
         assertTrue(limiter.tryAcquire(8L));
 
-        // After the window expires, the counter resets.
-        Thread.sleep(1200);
-        assertTrue(limiter.tryAcquire(7L), "window reset allows again");
+        // After the window's Redis TTL expires the counter resets; poll instead
+        // of sleeping a fixed amount to avoid a flaky/slow test.
+        await().atMost(Duration.ofSeconds(3)).until(() -> limiter.tryAcquire(7L));
     }
 }
