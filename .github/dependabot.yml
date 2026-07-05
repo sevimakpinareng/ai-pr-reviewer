@@ -1,0 +1,16 @@
+version: 2
+updates:
+  # Keep Maven dependencies current/patched with weekly update PRs.
+  - package-ecosystem: maven
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 10
+    labels: [ "dependencies" ]
+
+  # Keep the GitHub Actions used by the CI workflow up to date too.
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    labels: [ "dependencies", "ci" ]
