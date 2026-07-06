@@ -30,7 +30,7 @@
         <testcontainers.version>1.21.3</testcontainers.version>
         <logstash-encoder.version>8.0</logstash-encoder.version>
         <wiremock.version>3.9.2</wiremock.version>
-        <jacoco.version>0.8.12</jacoco.version>
+        <jacoco.version>0.8.15</jacoco.version>
     </properties>
 
     <dependencyManagement>
