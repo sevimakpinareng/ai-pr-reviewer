@@ -1,122 +1,198 @@
-# pr-reviewer
+# AI PR Reviewer
+
+An **AI-powered code-review bot for GitHub pull requests**, built with Java 21 and
+Spring Boot. It authenticates as a GitHub App, ingests webhook deliveries securely,
+runs an LLM over each changed file, and posts a single batched review back to the
+PR — with idempotency, rate limiting, and asynchronous processing built in.
 
 [![CI](https://github.com/sevimakpinareng/ai-pr-reviewer/actions/workflows/ci.yml/badge.svg)](https://github.com/sevimakpinareng/ai-pr-reviewer/actions/workflows/ci.yml)
+![Java](https://img.shields.io/badge/Java-21-007396?logo=openjdk&logoColor=white)
+![Spring Boot](https://img.shields.io/badge/Spring_Boot-3.4-6DB33F?logo=springboot&logoColor=white)
+![Spring AI](https://img.shields.io/badge/Spring_AI-1.0-6DB33F?logo=spring&logoColor=white)
+![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16-336791?logo=postgresql&logoColor=white)
+![Redis](https://img.shields.io/badge/Redis-7-DC382D?logo=redis&logoColor=white)
+![RabbitMQ](https://img.shields.io/badge/RabbitMQ-3-FF6600?logo=rabbitmq&logoColor=white)
 
-An AI code-review bot for GitHub pull requests: a signed webhook is queued
-(RabbitMQ), a worker fetches the PR diff, reviews it file by file with an LLM
-(Spring AI — local Ollama or Mistral), persists the findings (PostgreSQL), and
-posts them back as a single GitHub review. Redis provides dedupe / superseding /
-rate limiting, and metrics are exposed for Prometheus.
+## ✨ Highlights
 
-## Stack
+- 🔐 **HMAC-verified webhooks** — every delivery's `X-Hub-Signature-256` is verified
+  with **HMAC-SHA256 over the raw request body**, compared in **constant time**
+  (timing-attack resistant). Invalid/missing signatures are rejected with `401`.
+- 🔑 **GitHub App authentication** — signs a short-lived **RS256 JWT** with the App's
+  RSA private key (PKCS#1 or PKCS#8), exchanges it for an installation token, and
+  calls the GitHub API as the installation.
+- ⚡ **Async processing** — the webhook returns fast; the actual review runs off a
+  **RabbitMQ** work queue with retry and dead-lettering, so slow LLM calls never
+  block or time out GitHub deliveries.
+- 🧠 **Redis-backed guards** — **idempotency/dedup** (the same delivery is never
+  reviewed twice), **PR superseding** (a new push cancels the in-flight review of an
+  older commit), and **rate limiting** per installation. All guards **fail open**, so
+  a Redis outage degrades gracefully instead of dropping reviews.
+- 🤖 **Pluggable LLM review** — per-file diff analysis via **Spring AI**, defaulting to
+  local **Ollama** (`qwen2.5-coder`) for free development, switchable to the hosted
+  **Mistral** API with one profile flag. Findings are severity-ranked and posted as a
+  single batched PR review.
+- 📊 **Observability** — **Prometheus** metrics (Micrometer) and **structured logging**
+  with per-delivery MDC context (delivery id, repo, PR number).
+- 🗄️ **Persistent state** — reviews and comments stored in **PostgreSQL** with
+  **Flyway** migrations; API documented via **springdoc-openapi** (Swagger UI).
+- ✅ **72 tests** — fast unit tests **plus** Testcontainers integration tests against
+  real PostgreSQL, Redis, and RabbitMQ, with JaCoCo coverage.
 
-- Java 21
-- Spring Boot 3.4 (Web, Data JPA, Validation, Actuator)
-- PostgreSQL 16
-- Flyway (schema migrations)
-- springdoc-openapi (Swagger UI)
-- Maven (with wrapper)
+## 🧰 Tech stack
 
-## Project layout
+| Concern           | Technology                                             |
+| ----------------- | ------------------------------------------------------ |
+| Runtime           | Java 21, Spring Boot 3.4                               |
+| AI                | Spring AI 1.0 — Ollama (default) / Mistral (profile)   |
+| Database          | PostgreSQL 16 + Flyway migrations                      |
+| Async queue       | RabbitMQ (Spring AMQP)                                  |
+| Guards / cache    | Redis (dedup, superseding, rate limiting)              |
+| GitHub            | GitHub App (RS256 JWT auth), webhook (HMAC-SHA256)     |
+| API docs          | springdoc-openapi (Swagger UI)                         |
+| Observability     | Micrometer + Prometheus, structured logging (Logback)  |
+| Testing           | JUnit 5, Testcontainers, JaCoCo                        |
+| Tooling / DevOps  | Maven (wrapper), Docker, Docker Compose, GitHub Actions|
 
+## 🏛️ Architecture & flow
+
+A GitHub PR event flows through verification and guard layers before an LLM ever runs,
+and heavy work happens off the request thread:
+
+```mermaid
+flowchart LR
+    GH["GitHub\npull_request event"] -->|webhook| WH["WebhookController\nHMAC-SHA256 verify"]
+    WH -->|"idempotency + rate-limit\n(Redis, fail-open)"| Q{{"RabbitMQ\nqueue"}}
+    Q --> C["ReviewJobConsumer"]
+    C -->|"GitHub App auth\n(RS256 JWT → token)"| API["GitHub API\nfetch PR diff"]
+    API --> P["DiffParser\nper-file hunks"]
+    P --> LLM["Spring AI review\nOllama / Mistral"]
+    LLM --> DB[("PostgreSQL\nreviews + comments")]
+    LLM -->|"batched review\n(supersede older)"| GH
 ```
-src/main/java/com/example/prreviewer/
-├── config/      # @Configuration beans (empty skeleton)
-├── controller/  # REST controllers — HealthController
-├── service/     # business logic (empty skeleton)
-├── repository/  # Spring Data JPA repos (empty skeleton)
-├── entity/      # JPA entities (empty skeleton)
-└── dto/         # request/response DTOs (empty skeleton)
-src/main/resources/
-├── application.yml
-└── db/migration/V1__init.sql   # Flyway migrations
-```
 
-## Configuration
+1. **Ingest & verify** — `WebhookController` reads the raw body and verifies the
+   `X-Hub-Signature-256` HMAC before doing anything else.
+2. **Guard** — Redis-backed idempotency skips duplicate deliveries; a per-installation
+   rate limiter requeues when over budget.
+3. **Enqueue** — the delivery is handed to RabbitMQ and the endpoint returns `200`
+   immediately.
+4. **Authenticate** — the consumer mints an RS256 JWT from the App's private key and
+   exchanges it for an installation token.
+5. **Fetch & parse** — pulls the PR diff and splits it into per-file hunks with
+   line mapping.
+6. **Review** — Spring AI runs the review prompt per file; findings are collected,
+   severity-ranked, and capped.
+7. **Publish & persist** — posts one batched review to the PR (superseding any review
+   from an older commit) and stores the result in PostgreSQL.
 
-The app reads its DB connection from environment variables (no secrets in the
-repo). Copy the example file and adjust as needed:
+### Standout technical decisions
+
+- **Verify before you trust** — signature verification runs over the *exact* bytes
+  GitHub signed (no JSON round-trip) and uses constant-time comparison.
+- **Never block the webhook** — LLM latency is unpredictable, so review work is fully
+  asynchronous over RabbitMQ; GitHub always gets a fast `200`.
+- **Correctness under races** — pushing a new commit *supersedes* the in-flight review
+  of the previous one, so stale reviews are never posted.
+- **Degrade, don't drop** — Redis guards fail open: if Redis is down, reviews still run
+  (just without dedup/rate-limit), rather than being silently lost.
+
+## 🚀 Quick start
+
+**Prerequisites:** [JDK 21](https://adoptium.net/), Docker + Docker Compose, and a
+GitHub App (App ID, private key `.pem`, and a webhook secret).
 
 ```bash
+# 1. Provide local config (gitignored)
 cp .env.example .env
-```
+#    set GITHUB_APP_ID, GITHUB_WEBHOOK_SECRET, GITHUB_PRIVATE_KEY_PATH,
+#    and (optionally) MISTRAL_API_KEY. Put the App private key under ./secrets/.
 
-| Variable      | Meaning                          | Default                                        |
-|---------------|----------------------------------|------------------------------------------------|
-| `DB_URL`      | JDBC URL for Postgres            | `jdbc:postgresql://localhost:5432/prreviewer`  |
-| `DB_USER`     | DB username                      | `prreviewer`                                   |
-| `DB_PASSWORD` | DB password                      | `prreviewer`                                   |
-
-## Run it
-
-### 1. Start the database
-
-```bash
+# 2. Start the infrastructure (PostgreSQL, Redis, RabbitMQ, Prometheus, Grafana)
 docker compose up -d
-```
 
-This boots PostgreSQL on `localhost:5432` with a persistent named volume
-(`pgdata`), so your data survives container restarts.
-
-### 2. Run the application
-
-```bash
+# 3. Run the app (Ollama profile is the default; pull the model first if using it)
+#    ollama pull qwen2.5-coder:7b
 ./mvnw spring-boot:run
 ```
 
-On startup Flyway applies `V1__init.sql`, creating the `installations` and
-`repositories` tables.
-
-## Endpoints
-
-| Endpoint              | Purpose                                            |
-|-----------------------|----------------------------------------------------|
-| `GET /api/health`     | Simple app liveness check                          |
-| `GET /actuator/health`| Spring Boot health (includes DB status)            |
-| `GET /swagger-ui.html`| API documentation                                  |
-
-## Build & Test
+Flyway applies migrations on startup. To use hosted Mistral instead of local Ollama:
 
 ```bash
-./mvnw verify
+SPRING_PROFILES_ACTIVE=mistral MISTRAL_API_KEY=... ./mvnw spring-boot:run
 ```
 
-`verify` compiles, runs the unit tests, runs the integration + end-to-end tests
-(which spin up **real** PostgreSQL, RabbitMQ, and Redis via Testcontainers — a
-working Docker daemon is required), and produces a JaCoCo coverage report at
-`target/site/jacoco/index.html`.
+Point your GitHub App's webhook at `POST /api/webhooks/github` (e.g. via a tunnel in
+development).
 
-- **On standard Docker (Linux/CI):** just `./mvnw verify` — Testcontainers finds
-  the Docker socket automatically.
-- **On local macOS + colima:** add `-Pcolima` and point Docker at a space-free
-  socket, because of quirks in that setup:
+### Configuration
 
-  ```bash
-  ln -sf "$HOME/Library/Application Support/colima/default/docker.sock" /tmp/colima.sock
-  DOCKER_HOST=unix:///tmp/colima.sock ./mvnw -Pcolima verify
-  ```
+All secrets come from the environment — **nothing sensitive is committed**. See
+[`.env.example`](.env.example) for the full list; the key groups are:
 
-  The `colima` profile is **local-only**; CI does not use it.
+| Group        | Variables (examples)                                             |
+| ------------ | --------------------------------------------------------------- |
+| Database     | `DB_URL`, `DB_USER`, `DB_PASSWORD`                              |
+| RabbitMQ     | `RABBITMQ_HOST`, `RABBITMQ_PORT`, `RABBITMQ_USER`, `RABBITMQ_PASSWORD` |
+| Redis        | `REDIS_HOST`, `REDIS_PORT`, `DEDUPE_TTL`, `SUPERSEDE_TTL`, `RATELIMIT_LIMIT`, `RATELIMIT_WINDOW` |
+| GitHub       | `GITHUB_WEBHOOK_SECRET`, `GITHUB_APP_ID`, `GITHUB_PRIVATE_KEY_PATH` |
+| AI review    | `OLLAMA_BASE_URL`, `OLLAMA_MODEL`, `MISTRAL_API_KEY`, `MISTRAL_MODEL`, `REVIEW_*` tuning |
 
-To run only the fast unit tests (skip the container-backed ones):
+### Endpoints
+
+| Endpoint                    | Purpose                                |
+| --------------------------- | -------------------------------------- |
+| `POST /api/webhooks/github` | Signed GitHub webhook ingestion        |
+| `GET /api/health`           | Liveness check                         |
+| `GET /actuator/health`      | Spring Boot health (includes DB)       |
+| `GET /actuator/prometheus`  | Prometheus scrape endpoint             |
+| `GET /swagger-ui.html`      | API documentation (springdoc-openapi)  |
+
+## 🧪 Testing
+
+**72 tests** in `src/test` across two tiers:
+
+- **Unit** — HMAC verification, RSA key loading, diff parsing/line mapping, review
+  orchestration, the Redis guards' fail-open behavior, and metrics.
+- **Integration (Testcontainers)** — the app over real **PostgreSQL**, **Redis**, and
+  **RabbitMQ** containers: persistence, the async consumer, actuator endpoints, and a
+  full **webhook → queue → review → persist** end-to-end path. External edges (the
+  GitHub API and the LLM) are mocked, so **no secrets are needed** to run the suite.
 
 ```bash
+# Full suite (Docker must be running for Testcontainers) + JaCoCo coverage
+./mvnw verify          # report at target/site/jacoco/index.html
+
+# Fast unit tests only (skip the container-backed ones)
 ./mvnw test -DexcludedGroups=integration
 ```
 
-## Continuous integration
+> **Testcontainers with Colima:** on standard Docker (Linux/CI) `./mvnw verify` just
+> works. If you use Colima instead of Docker Desktop, use the bundled local profile,
+> which pins the Docker API version and honors a space-free socket path:
+>
+> ```bash
+> ln -sf "$HOME/Library/Application Support/colima/default/docker.sock" /tmp/colima.sock
+> DOCKER_HOST=unix:///tmp/colima.sock ./mvnw -Pcolima verify
+> ```
 
-Every push to `main` and every pull request runs [`.github/workflows/ci.yml`](.github/workflows/ci.yml):
-a fast **compile** job for quick feedback, then a **build** job that runs
-`mvn verify` (build + unit + integration + coverage). Testcontainers runs
-directly on the Ubuntu runner's Docker, and because the tests mock the external
-edges (GitHub API and the LLM), **no secrets are needed**. Surefire and JaCoCo
-reports are uploaded as build artifacts (even on failure), and a coverage
-summary is written to the job summary. Dependabot ([`.github/dependabot.yml`](.github/dependabot.yml))
-opens weekly PRs to keep Maven and Actions dependencies current.
+## 🔄 Continuous integration
 
-## Roadmap (not in this skeleton)
+Every push to `main` and every pull request runs
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml): a fast **compile** job for
+quick feedback, then a **build** job that runs `mvn verify` (build + unit + integration
++ coverage). Testcontainers runs on the runner's Docker; because the external edges are
+mocked, **no secrets are required**. Surefire and JaCoCo reports are uploaded as
+artifacts, and [Dependabot](.github/dependabot.yml) opens weekly dependency PRs.
 
-- GitHub App webhook ingestion
-- GitHub API integration
-- LLM-powered review generation
+## 🗺️ Roadmap
+
+- [x] Secure webhook ingestion (HMAC-SHA256)
+- [x] GitHub App authentication (RS256 JWT) + PR diff fetch
+- [x] LLM diff review via Spring AI (Ollama / Mistral)
+- [x] Persistence (PostgreSQL + Flyway) and batched PR review publishing
+- [x] Async processing (RabbitMQ)
+- [x] Redis guards: idempotency, superseding, rate limiting
+- [x] Observability (Prometheus metrics, structured logging) + coverage
+- [ ] Inline (line-level) review comments
+- [ ] Configurable per-repo review policies
