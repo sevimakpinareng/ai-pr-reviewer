@@ -21,7 +21,7 @@
         <java.version>21</java.version>
         <springdoc.version>2.8.0</springdoc.version>
         <jjwt.version>0.12.6</jjwt.version>
-        <bouncycastle.version>1.78.1</bouncycastle.version>
+        <bouncycastle.version>1.85</bouncycastle.version>
         <mockwebserver.version>4.12.0</mockwebserver.version>
         <spring-ai.version>1.0.0</spring-ai.version>
         <!-- Override the Boot-managed 1.20.x: newer docker-java negotiates a
